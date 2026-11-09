@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ingresar · La Esquina</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="login">
+    <section class="login-caja">
+      <div class="marca"><strong>LA ESQUINA</strong><span>RESTAURANTE DE SIEMPRE</span></div>
+      <h1>Ingresá a tu turno.</h1>
+      <p class="sub">Cada persona ve solo lo que necesita para trabajar.</p>
+
+      <form id="form-login" novalidate>
+        <label for="usuario">Usuario</label>
+        <input type="text" id="usuario" name="usuario" autocomplete="username" autofocus>
+        <label for="clave">Contraseña</label>
+        <input type="password" id="clave" name="clave" autocomplete="current-password">
+        <p class="error" id="error" role="alert" hidden></p>
+        <button class="btn" type="submit" id="btn-ingresar">Ingresar</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+  <script>
+    const actual = sesionActual();
+    if (actual && ROLES[actual.rol]) location.replace(ROLES[actual.rol].pagina);
+
+    const form = document.getElementById('form-login');
+    const error = document.getElementById('error');
+    const boton = document.getElementById('btn-ingresar');
+
+    function mostrarError(texto) { error.textContent = texto; error.hidden = false; }
+
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      error.hidden = true;
+      const usuario = form.usuario.value.trim();
+      const clave = form.clave.value;
+      if (!usuario || !clave) { mostrarError('Completá usuario y contraseña.'); return; }
+
+      boton.disabled = true;
+      try {
+        const datos = await api.login(usuario, clave);
+        guardarSesion(datos);
+        location.replace(ROLES[datos.rol].pagina);
+      } catch (err) {
+        mostrarError(err.message);
+        form.clave.value = '';
+        form.clave.focus();
+      } finally {
+        boton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

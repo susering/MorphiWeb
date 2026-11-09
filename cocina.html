@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cocina · La Esquina</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="cabecera" id="cabecera"></header>
+
+  <main class="contenido una-columna">
+    <section>
+      <div class="encabezado">
+        <div>
+          <p class="sobre">Preparación y despacho</p>
+          <h1>Cada plato, a su tiempo.</h1>
+          <p class="sub">Prepará por orden de llegada y marcá cada plato cuando esté listo.</p>
+        </div>
+        <div class="contadores">
+          <div class="contador marca"><b id="n-pedidos">0</b>Pedidos pendientes</div>
+          <div class="contador verde"><b id="n-platos">0</b>Platos por preparar</div>
+        </div>
+      </div>
+
+      <div class="cola-cab">
+        <h3>Pedidos pendientes</h3>
+        <span class="orden">Orden de llegada · Más antiguo primero</span>
+      </div>
+
+      <div class="cola" id="cola" aria-live="polite"></div>
+      <div class="despacho" id="despacho" role="status" hidden></div>
+
+      <div class="pie-cocina">
+        <small>Solo platos de cocina · Las bebidas se atienden en el salón.</small>
+        <small>Al marcar “Listo”, el plato sale de esta cola.</small>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+  <script>
+    const contenedor = document.getElementById('cola');
+    const aviso = document.getElementById('despacho');
+    let platos = [];
+    let temporizador = null;
+
+    /* Agrupa los platos por pedido respetando el orden que entrega la API (más antiguo primero). */
+    function agrupar(lista) {
+      const grupos = [];
+      lista.forEach(p => {
+        let g = grupos.find(g => g.pedidoId === p.pedidoId);
+        if (!g) { g = { pedidoId: p.pedidoId, mesa: p.mesa, creado: p.creado, platos: [] }; grupos.push(g); }
+        g.platos.push(p);
+      });
+      return grupos;
+    }
+
+    function pintarCola() {
+      const grupos = agrupar(platos);
+      document.getElementById('n-pedidos').textContent = grupos.length;
+      document.getElementById('n-platos').textContent = platos.reduce((t, p) => t + p.cantidad, 0);
+
+      if (!grupos.length) {
+        contenedor.innerHTML = '<div class="vacio-cola"><h3>No hay platos pendientes.</h3><p class="sub">Los pedidos nuevos aparecen acá apenas el mozo los envía.</p></div>';
+        return;
+      }
+      contenedor.innerHTML = grupos.map((g, i) => `
+        <article class="pedido${i === 0 ? ' primero' : ''}">
+          <div class="pedido-info">
+            <div>
+              <div class="fila"><h3>Mesa ${pad(g.mesa)}</h3><span class="tiempo">${minutosDesde(g.creado) < 1 ? 'Ahora' : minutosDesde(g.creado) + ' min'}</span></div>
+              <small>${hhmm(g.creado)} · Pedido #${g.pedidoId}</small>
+              ${i === 0 && grupos.length > 1 ? '<span class="etiqueta">MÁS ANTIGUO</span>' : ''}
+            </div>
+          </div>
+          <div class="lineas">
+            ${g.platos.map(p => `
+              <div class="linea">
+                <span class="cant">${p.cantidad}</span>
+                <div><strong>${esc(p.nombre)}</strong><small>${esc(p.nota || 'Sin aclaraciones')}</small></div>
+                <button type="button" class="btn-listo" data-id="${p.detalleId}" aria-label="Marcar listo: ${esc(p.nombre)}, mesa ${pad(g.mesa)}">Listo</button>
+              </div>`).join('')}
+          </div>
+        </article>`).join('');
+    }
+
+    async function cargarCola() {
+      try { platos = await api.cola(); pintarCola(); } catch { /* se reintenta en el próximo ciclo */ }
+    }
+
+    function avisarDespacho(plato) {
+      aviso.innerHTML = `<strong>Plato despachado</strong><span>Mesa ${pad(plato.mesa)} · ${plato.cantidad} ${esc(plato.nombre)}</span><span>La cola conserva el orden de llegada.</span>`;
+      aviso.hidden = false;
+      clearTimeout(temporizador);
+      temporizador = setTimeout(() => { aviso.hidden = true; }, 6000);
+    }
+
+    contenedor.addEventListener('click', async e => {
+      const boton = e.target.closest('.btn-listo');
+      if (!boton) return;
+      const plato = platos.find(p => p.detalleId === Number(boton.dataset.id));
+      boton.disabled = true;
+      try {
+        await api.marcarListo(plato.detalleId);
+        avisarDespacho(plato);
+      } catch { /* si ya no estaba, la recarga lo saca de la pantalla */ }
+      cargarCola();
+    });
+
+    if (exigirRol('cocina')) {
+      montarCabecera('cocina', { reloj: true });
+      cargarCola();
+      sincronizar(cargarCola);
+    }
+  </script>
+</body>
+</html>

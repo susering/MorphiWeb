@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Salón · La Esquina</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="cabecera" id="cabecera"></header>
+
+  <main class="contenido">
+    <section>
+      <div class="encabezado">
+        <div>
+          <p class="sobre">Atención en mesa</p>
+          <h1>El salón, de un vistazo.</h1>
+          <p class="sub">Seleccioná una mesa libre para cargar una comanda.</p>
+        </div>
+        <div class="contadores">
+          <div class="contador verde"><b id="n-libres">0</b>Mesas libres</div>
+          <div class="contador rojo"><b id="n-ocupadas">0</b>Mesas ocupadas</div>
+        </div>
+      </div>
+
+      <div class="tarjeta">
+        <div class="fila salon-cab">
+          <div><h3>Salón principal</h3><small id="n-mesas"></small></div>
+          <div class="leyenda">
+            <span class="libre"><i class="punto"></i>Libre</span>
+            <span class="ocupada"><i class="punto"></i>Ocupada</span>
+          </div>
+        </div>
+        <div class="mesas" id="mapa"></div>
+        <div class="salon-pie">
+          <small>ENTRADA AL SALÓN</small>
+          <small>Las mesas libres están listas para recibir un pedido.</small>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </main>
+
+  <script src="script.js"></script>
+  <script>
+    let mesas = [];
+    let productos = [];
+    let cantidades = {};      // { productoId: cantidad } de la comanda en curso
+    let mesaSel = null;
+    let filtro = 'todos';
+    let vista = 'vacio';      // vacio | form | enviado
+
+    const panel = document.getElementById('panel');
+    const mapa = document.getElementById('mapa');
+
+    /* ---------- Mapa y contadores ---------- */
+    function detalleMesa(m, elegida) {
+      if (elegida) return 'Seleccionada · Nueva comanda';
+      if (m.estado === 'libre') return 'Disponible para un pedido';
+      if (minutosDesde(m.desde) < 1) return 'Pedido enviado · Ahora';
+      return (m.personas ? `${plural(m.personas, 'persona', 'personas')} · ` : '') + hace(m.desde);
+    }
+
+    function pintarMapa() {
+      const libres = mesas.filter(m => m.estado === 'libre').length;
+      document.getElementById('n-libres').textContent = libres;
+      document.getElementById('n-ocupadas').textContent = mesas.length - libres;
+      document.getElementById('n-mesas').textContent = `${mesas.length} mesas`;
+      pintarMesas(mapa, mesas, {
+        puedeElegir: m => m.estado === 'libre',
+        detalle: detalleMesa,
+        elegida: vista === 'form' ? mesaSel.id : null,
+        alElegir: abrirComanda
+      });
+    }
+
+    async function refrescarMesas() {
+      try { mesas = await api.mesas(); pintarMapa(); } catch { /* se reintenta en el próximo ciclo */ }
+    }
+
+    /* ---------- Panel: estado inicial ---------- */
+    function panelVacio() {
+      vista = 'vacio'; mesaSel = null;
+      panel.innerHTML = `
+        <p class="sobre">Comandas</p>
+        <h2>Cada pedido empieza acá.</h2>
+        <p class="sub" style="margin-top:12px">Elegí una mesa verde en el mapa del salón.</p>
+        <hr>
+        <div class="vacio">
+          <div class="chip-grande"><strong>Mesa libre</strong><span>Lista para atender</span></div>
+          <h3>Una comanda, sin papel.</h3>
+          <p class="sub">Del salón a la cocina, todo en un lugar.</p>
+        </div>
+        <ol class="pasos">
+          <li><b>1</b><div><strong>Seleccioná una mesa</strong><small>Elegí dónde vas a tomar el pedido.</small></div></li>
+          <li><b>2</b><div><strong>Agregá los productos</strong><small>Indicá las cantidades y aclaraciones.</small></div></li>
+          <li><b>3</b><div><strong>Enviá a cocina</strong><small>La mesa pasará a estar ocupada.</small></div></li>
+        </ol>`;
+      pintarMapa();
+    }
+
+    /* ---------- Panel: nueva comanda ---------- */
+    async function abrirComanda(mesa) {
+      if (!productos.length) {
+        try { productos = await api.productos(); } catch { return; }
+      }
+      mesaSel = mesa; cantidades = {}; filtro = 'todos'; vista = 'form';
+      panel.innerHTML = `
+        <p class="sobre">Nueva comanda</p>
+        <div class="fila"><h2>Mesa ${pad(mesa.numero)}</h2><span class="chip libre"><i class="punto"></i>Libre</span></div>
+        <p class="sub" style="margin-top:10px">Elegí los productos y sus cantidades.</p>
+        <hr>
+        <div class="fila"><h3>Productos</h3><small>Precios en ARS</small></div>
+        <div class="filtros" id="filtros">
+          <button type="button" data-f="todos" aria-pressed="true">Todos</button>
+          <button type="button" data-f="cocina" aria-pressed="false">Cocina</button>
+          <button type="button" data-f="bebida" aria-pressed="false">Bebidas</button>
+        </div>
+        <div id="lista"></div>
+        <label for="nota">Aclaraciones para cocina <small>Opcional</small></label>
+        <textarea id="nota" maxlength="200" placeholder="Ej.: sin sal, gaseosa sin hielo..."></textarea>
+        <div class="total-fila"><span id="resumen"></span><strong id="total"></strong></div>
+        <p class="error" id="error" role="alert" hidden></p>
+        <button class="btn" type="button" id="enviar">Enviar pedido</button>
+        <small class="pie-panel">Al enviar, la mesa pasará a ocupada.</small>`;
+
+      document.getElementById('filtros').addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        filtro = b.dataset.f;
+        document.querySelectorAll('#filtros button').forEach(x => x.setAttribute('aria-pressed', x === b));
+        pintarLista();
+      });
+      document.getElementById('lista').addEventListener('click', e => {
+        const b = e.target.closest('button[data-id]'); if (!b) return;
+        const id = Number(b.dataset.id);
+        cantidades[id] = Math.min(99, Math.max(0, (cantidades[id] || 0) + Number(b.dataset.d)));
+        pintarLista();
+        const foco = document.querySelector(`#lista button[data-id="${id}"][data-d="${b.dataset.d}"]`);
+        if (foco) foco.focus();
+      });
+      document.getElementById('enviar').addEventListener('click', enviarPedido);
+      pintarLista();
+      pintarMapa();
+    }
+
+    function pintarLista() {
+      document.getElementById('lista').innerHTML = productos
+        .filter(p => filtro === 'todos' || p.categoria === filtro)
+        .map(p => {
+          const c = cantidades[p.id] || 0;
+          return `
+            <div class="prod">
+              <div><strong>${esc(p.nombre)}</strong><small>${fmtPrecio(p.precio)}</small></div>
+              <div class="stepper">
+                <button type="button" data-id="${p.id}" data-d="-1" aria-label="Quitar una unidad de ${esc(p.nombre)}" ${c === 0 ? 'disabled' : ''}>−</button>
+                <output>${c}</output>
+                <button type="button" data-id="${p.id}" data-d="1" aria-label="Agregar una unidad de ${esc(p.nombre)}">+</button>
+              </div>
+            </div>`;
+        }).join('');
+      /* Vista previa para el mozo: el total oficial lo calcula la base de datos al enviar. */
+      const unidades = Object.values(cantidades).reduce((a, b) => a + b, 0);
+      const previo = productos.reduce((t, p) => t + p.precio * (cantidades[p.id] || 0), 0);
+      document.getElementById('resumen').textContent = `Total · ${plural(unidades, 'unidad', 'unidades')}`;
+      document.getElementById('total').textContent = fmtPrecio(previo);
+      document.getElementById('enviar').disabled = unidades === 0;
+    }
+
+    async function enviarPedido() {
+      const error = document.getElementById('error');
+      const boton = document.getElementById('enviar');
+      const items = Object.entries(cantidades)
+        .map(([id, cantidad]) => ({ productoId: Number(id), cantidad }))
+        .filter(i => i.cantidad > 0);
+      error.hidden = true;
+      if (!items.length) { error.textContent = 'Agregá al menos un producto antes de enviar.'; error.hidden = false; return; }
+
+      boton.disabled = true;
+      try {
+        const cuenta = await api.crearPedido(mesaSel.id, items, document.getElementById('nota').value.trim());
+        panelEnviado(mesaSel, cuenta);
+      } catch (err) {
+        error.textContent = err.message; error.hidden = false;
+        boton.disabled = false;
+        refrescarMesas();
+      }
+    }
+
+    /* ---------- Panel: pedido enviado ---------- */
+    function panelEnviado(mesa, cuenta) {
+      vista = 'enviado';
+      const unidades = cuenta.items.reduce((t, i) => t + i.cantidad, 0);
+      panel.innerHTML = `
+        <p class="sobre ok">Pedido enviado</p>
+        <h2>Todo listo para cocina.</h2>
+        <p class="sub" style="margin-top:10px">La comanda de la Mesa ${pad(mesa.numero)} ya está cargada.</p>
+        <div class="franja ocupada" style="margin-top:24px"><strong>Mesa ${pad(mesa.numero)}</strong><span class="chip ocupada" style="padding:0"><i class="punto"></i>Ocupada</span></div>
+        <h3 style="margin-top:28px">Resumen del pedido</h3>
+        <small>${plural(unidades, 'unidad', 'unidades')} · Enviado a cocina</small>
+        <ul class="items">
+          ${cuenta.items.map(i => `
+            <li><span class="cant">${i.cantidad}</span><span>${esc(i.nombre)}</span><span class="monto">${fmtPrecio(i.subtotal)}</span></li>`).join('')}
+        </ul>
+        <div class="total-fila"><span>Total del pedido</span><strong>${fmtPrecio(cuenta.total)}</strong></div>
+        <div class="aviso"><strong>Pedido recibido</strong>La mesa ahora figura en rojo en el salón.</div>
+        <button class="btn" type="button" id="volver">Volver al salón</button>
+        <small class="pie-panel">Podés continuar atendiendo otras mesas.</small>`;
+      document.getElementById('volver').addEventListener('click', panelVacio);
+      refrescarMesas();
+    }
+
+    /* ---------- Inicio ---------- */
+    if (exigirRol('mozo')) {
+      montarCabecera('mozo');
+      refrescarMesas().then(panelVacio);
+      sincronizar(refrescarMesas);
+    }
+  </script>
+</body>
+</html>
